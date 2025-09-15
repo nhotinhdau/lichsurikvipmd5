@@ -2,6 +2,8 @@ import json
 import logging
 import ssl
 import os
+import time
+import threading
 from urllib.request import urlopen, Request
 from flask import Flask, jsonify
 
@@ -12,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 # ===== Config =====
 HOST = "0.0.0.0"
+POLL_INTERVAL = 3   # gọi API gốc mỗi 3 giây
 ssl._create_default_https_context = ssl._create_unverified_context
 API_URL = "https://jakpotgwab.geightdors.net/glms/v1/notify/taixiu?platform_id=rik&gid=vgmn_101"
 
@@ -27,6 +30,7 @@ latest_result = {
     "Ket_qua": "Chưa có",
     "id": "cskhtoollxk"
 }
+lock = threading.Lock()
 
 
 def get_tai_xiu(d1, d2, d3):
@@ -34,53 +38,58 @@ def get_tai_xiu(d1, d2, d3):
     return ("Xỉu" if total <= 10 else "Tài"), total
 
 
-def fetch_latest():
-    """Lấy phiên mới nhất từ API gốc và update cache nếu có"""
+def fetch_and_update():
+    """Thread nền: liên tục gọi API gốc để lấy phiên mới nhất"""
     global latest_result
-    try:
-        req = Request(API_URL, headers={
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "application/json,text/plain,*/*"
-        })
-        with urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+    while True:
+        try:
+            req = Request(API_URL, headers={
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "application/json,text/plain,*/*"
+            })
+            with urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
 
-        if data.get("status") == "OK" and isinstance(data.get("data"), list):
-            game = data["data"][-1]  # lấy phiên mới nhất
+            if data.get("status") == "OK" and isinstance(data.get("data"), list):
+                game = data["data"][-1]  # phiên mới nhất
 
-            if game.get("cmd") == 7006:
-                sid = game.get("sid")
-                d1, d2, d3 = game.get("d1"), game.get("d2"), game.get("d3")
+                if game.get("cmd") == 7006:
+                    sid = game.get("sid")
+                    d1, d2, d3 = game.get("d1"), game.get("d2"), game.get("d3")
 
-                if sid:
-                    if None not in (d1, d2, d3):
-                        ket_qua, total = get_tai_xiu(d1, d2, d3)
-                    else:
-                        ket_qua, total = "Đang chờ", 0
+                    if sid:
+                        if None not in (d1, d2, d3):
+                            ket_qua, total = get_tai_xiu(d1, d2, d3)
+                        else:
+                            ket_qua, total = "Đang chờ", 0
 
-                    # chỉ update nếu là phiên mới
-                    if sid != latest_result["Phien"]:
-                        latest_result = {
-                            "Phien": sid,
-                            "Xuc_xac_1": d1 or 0,
-                            "Xuc_xac_2": d2 or 0,
-                            "Xuc_xac_3": d3 or 0,
-                            "Tong": total,
-                            "Ket_qua": ket_qua,
-                            "id": "cskhtoollxk"
-                        }
-                        logger.info(f"Cập nhật phiên mới: {sid} - {ket_qua}")
-    except Exception as e:
-        logger.error(f"Lỗi khi fetch API: {e}")
+                        with lock:
+                            if sid != latest_result["Phien"]:
+                                latest_result = {
+                                    "Phien": sid,
+                                    "Xuc_xac_1": d1 or 0,
+                                    "Xuc_xac_2": d2 or 0,
+                                    "Xuc_xac_3": d3 or 0,
+                                    "Tong": total,
+                                    "Ket_qua": ket_qua,
+                                    "id": "cskhtoollxk"
+                                }
+                                logger.info(f"Cập nhật phiên mới: {sid} - {ket_qua}")
 
-    return latest_result  # luôn trả về cache (dù có lỗi hay không)
+        except Exception as e:
+            logger.error(f"Lỗi khi fetch API: {e}")
+
+        time.sleep(POLL_INTERVAL)
 
 
 @app.route("/api/taixiu", methods=["GET"])
 def api_taixiu():
-    return jsonify(fetch_latest())
+    with lock:
+        return jsonify(latest_result)
 
 
 if __name__ == "__main__":
+    logger.info("Khởi động API Tài Xỉu...")
+    threading.Thread(target=fetch_and_update, daemon=True).start()
     port = int(os.environ.get("PORT", 8000))
     app.run(host=HOST, port=port)
