@@ -52,28 +52,41 @@ def poll_api():
                 data = json.loads(resp.read().decode("utf-8"))
 
             if data.get("status") == "OK" and isinstance(data.get("data"), list):
-                game = data["data"][-1]  # phiên mới nhất
-                if game.get("cmd") == 7006:
+                # lấy phiên có sid lớn nhất
+                games = [g for g in data["data"] if g.get("cmd") == 7006 and g.get("sid")]
+                if games:
+                    game = max(games, key=lambda g: g["sid"])  # phiên mới nhất
                     sid = game.get("sid")
                     d1, d2, d3 = game.get("d1"), game.get("d2"), game.get("d3")
 
-                    if sid and sid != last_sid:
+                    if sid != last_sid:
+                        # nếu sang phiên mới → update luôn (dù dice chưa có)
                         last_sid = sid
-                        if None not in (d1, d2, d3):
-                            ket_qua, total = get_tai_xiu(d1, d2, d3)
-                        else:
-                            ket_qua, total = "Đang chờ", 0
-
                         latest_result = {
                             "Phien": sid,
                             "Xuc_xac_1": d1 or 0,
                             "Xuc_xac_2": d2 or 0,
                             "Xuc_xac_3": d3 or 0,
-                            "Tong": total,
-                            "Ket_qua": ket_qua,
+                            "Tong": (d1 + d2 + d3) if None not in (d1, d2, d3) else 0,
+                            "Ket_qua": get_tai_xiu(d1, d2, d3)[0] if None not in (d1, d2, d3) else "Đang chờ",
                             "id": "cskhtoollxk"
                         }
-                        logger.info(f"[TX] Phiên {sid} - {ket_qua}")
+                        logger.info(f"[TX] Sang phiên mới: {sid}")
+
+                    else:
+                        # cùng phiên cũ nhưng dice đã ra → update lại
+                        if None not in (d1, d2, d3):
+                            ket_qua, total = get_tai_xiu(d1, d2, d3)
+                            latest_result = {
+                                "Phien": sid,
+                                "Xuc_xac_1": d1,
+                                "Xuc_xac_2": d2,
+                                "Xuc_xac_3": d3,
+                                "Tong": total,
+                                "Ket_qua": ket_qua,
+                                "id": "cskhtoollxk"
+                            }
+                            logger.info(f"[TX] Phiên {sid} đủ dice: {ket_qua}")
 
         except Exception as e:
             logger.error(f"Lỗi khi fetch API: {e}")
@@ -88,7 +101,6 @@ def api_taixiu():
 
 if __name__ == "__main__":
     logger.info("Khởi động API server...")
-    # Chạy polling API ở thread nền
     threading.Thread(target=poll_api, daemon=True).start()
     port = int(os.environ.get("PORT", 8000))
     app.run(host=HOST, port=port)
