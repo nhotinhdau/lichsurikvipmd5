@@ -1,11 +1,11 @@
 import json
-import threading
-import time
 import logging
 import ssl
+import os
+import time
+import threading
 from urllib.request import urlopen, Request
 from flask import Flask, jsonify
-import os
 
 # ===== Logging =====
 logging.basicConfig(level=logging.INFO,
@@ -15,10 +15,12 @@ logger = logging.getLogger(__name__)
 # ===== Config =====
 HOST = "0.0.0.0"
 POLL_INTERVAL = 3   # gọi API mỗi 3 giây
-RETRY_DELAY = 5
+ssl._create_default_https_context = ssl._create_unverified_context
+API_URL = "https://jakpotgwab.geightdors.net/glms/v1/notify/taixiu?platform_id=rik&gid=vgmn_101"
 
-lock = threading.Lock()
+app = Flask(__name__)
 
+# Cache phiên mới nhất
 latest_result = {
     "Phien": 0,
     "Xuc_xac_1": 0,
@@ -31,90 +33,62 @@ latest_result = {
 
 last_sid = None
 
-# Bỏ verify SSL để tránh lỗi chứng chỉ
-ssl._create_default_https_context = ssl._create_unverified_context
 
-
-# ===== Helper =====
 def get_tai_xiu(d1, d2, d3):
     total = d1 + d2 + d3
-    return "Xỉu" if total <= 10 else "Tài"
+    return ("Xỉu" if total <= 10 else "Tài"), total
 
 
-def update_result(result):
-    with lock:
-        latest_result.clear()
-        latest_result.update(result)
-
-
-# ===== Poll API =====
 def poll_api():
-    global last_sid
-    url = "https://jakpotgwab.geightdors.net/glms/v1/notify/taixiu?platform_id=rik&gid=vgmn_101"
-
+    """Luôn chạy nền để fetch phiên mới nhất"""
+    global latest_result, last_sid
     while True:
         try:
-            req = Request(url, headers={"User-Agent": "Python-Proxy/1.0"})
+            req = Request(API_URL, headers={
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "application/json,text/plain,*/*"
+            })
             with urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
 
             if data.get("status") == "OK" and isinstance(data.get("data"), list):
-                for game in data["data"]:
-                    if game.get("cmd") == 7006:
-                        sid = game.get("sid")
-                        d1, d2, d3 = game.get("d1"), game.get("d2"), game.get("d3")
+                game = data["data"][-1]  # phiên mới nhất
+                if game.get("cmd") == 7006:
+                    sid = game.get("sid")
+                    d1, d2, d3 = game.get("d1"), game.get("d2"), game.get("d3")
 
-                        # Nếu có phiên mới
-                        if sid and sid != last_sid:
-                            last_sid = sid
-                            if None not in (d1, d2, d3):  # Có kết quả xúc xắc
-                                total = d1 + d2 + d3
-                                ket_qua = get_tai_xiu(d1, d2, d3)
-                                result = {
-                                    "Phien": sid,
-                                    "Xuc_xac_1": d1,
-                                    "Xuc_xac_2": d2,
-                                    "Xuc_xac_3": d3,
-                                    "Tong": total,
-                                    "Ket_qua": ket_qua,
-                                    "id": "cskhtoollxk"
-                                }
-                            else:  # Phiên mới nhưng chưa ra xúc xắc
-                                result = {
-                                    "Phien": sid,
-                                    "Xuc_xac_1": 0,
-                                    "Xuc_xac_2": 0,
-                                    "Xuc_xac_3": 0,
-                                    "Tong": 0,
-                                    "Ket_qua": "Chưa có",
-                                    "id": "cskhtoollxk"
-                                }
-                            update_result(result)
-                            logger.info(f"[TX] Cập nhật phiên {sid}")
+                    if sid and sid != last_sid:
+                        last_sid = sid
+                        if None not in (d1, d2, d3):
+                            ket_qua, total = get_tai_xiu(d1, d2, d3)
+                        else:
+                            ket_qua, total = "Đang chờ", 0
+
+                        latest_result = {
+                            "Phien": sid,
+                            "Xuc_xac_1": d1 or 0,
+                            "Xuc_xac_2": d2 or 0,
+                            "Xuc_xac_3": d3 or 0,
+                            "Tong": total,
+                            "Ket_qua": ket_qua,
+                            "id": "cskhtoollxk"
+                        }
+                        logger.info(f"[TX] Phiên {sid} - {ket_qua}")
 
         except Exception as e:
-            logger.error(f"Lỗi khi lấy dữ liệu API: {e}")
-            time.sleep(RETRY_DELAY)
+            logger.error(f"Lỗi khi fetch API: {e}")
 
         time.sleep(POLL_INTERVAL)
 
 
-# ===== Flask API =====
-app = Flask(__name__)
-
-
 @app.route("/api/taixiu", methods=["GET"])
-def get_taixiu():
-    with lock:
-        return jsonify(latest_result)
+def api_taixiu():
+    return jsonify(latest_result)
 
 
-# ===== Main =====
 if __name__ == "__main__":
-    logger.info("Khởi động hệ thống API Tài Xỉu...")
-    thread = threading.Thread(target=poll_api, daemon=True)
-    thread.start()
-    logger.info("Đã bắt đầu polling dữ liệu.")
-    port = int(os.environ.get("PORT", 8000))  # Render sẽ gán PORT
-    logger.info(f"Server chạy trên port {port}")
+    logger.info("Khởi động API server...")
+    # Chạy polling API ở thread nền
+    threading.Thread(target=poll_api, daemon=True).start()
+    port = int(os.environ.get("PORT", 8000))
     app.run(host=HOST, port=port)
