@@ -13,8 +13,8 @@ let latestResult = {
   Ket_qua: "Chưa có"
 };
 
-// Biến nhớ phiên đã log để tránh spam
-let lastLoggedPhien = 0;
+// Biến để chống spam log
+let lastLoggedPhien = null;
 
 // Hàm tính Tài/Xỉu
 function getTaiXiu(d1, d2, d3) {
@@ -33,6 +33,7 @@ async function pollApi() {
       timeout: 10000
     });
 
+    // Nếu API không hợp lệ thì giữ nguyên phiên hiện tại
     if (!resp.data || resp.data.status !== "OK" || !Array.isArray(resp.data.data)) {
       if (latestResult.Phien && lastLoggedPhien !== latestResult.Phien) {
         console.log("⏸ API chưa có dữ liệu, giữ nguyên phiên:", latestResult.Phien);
@@ -41,15 +42,14 @@ async function pollApi() {
       return;
     }
 
-    // Tìm phiên có cmd = 7006
+    // tìm phiên có cmd = 7006
     const game = resp.data.data.find(g => g.cmd === 7006);
-
     if (game && game.d1 != null && game.d2 != null && game.d3 != null) {
-      // Nếu là phiên mới thì cập nhật và log
-      if (game.sid !== latestResult.Phien) {
-        const total = game.d1 + game.d2 + game.d3;
-        const ket_qua = getTaiXiu(game.d1, game.d2, game.d3);
+      const total = game.d1 + game.d2 + game.d3;
+      const ket_qua = getTaiXiu(game.d1, game.d2, game.d3);
 
+      // chỉ log khi có phiên mới
+      if (game.sid !== latestResult.Phien) {
         latestResult = {
           Phien: game.sid,
           Xuc_xac_1: game.d1,
@@ -58,7 +58,6 @@ async function pollApi() {
           Tong: total,
           Ket_qua: ket_qua
         };
-
         console.log(`[TX] ✅ Phiên ${game.sid} - Tổng: ${total}, KQ: ${ket_qua}`);
         lastLoggedPhien = game.sid;
       }
@@ -69,10 +68,7 @@ async function pollApi() {
       }
     }
   } catch (err) {
-    if (latestResult.Phien && lastLoggedPhien !== latestResult.Phien) {
-      console.log("❌ Lỗi API, giữ nguyên phiên:", latestResult.Phien);
-      lastLoggedPhien = latestResult.Phien;
-    }
+    console.error("❌ Lỗi khi lấy dữ liệu API:", err.message);
   }
 }
 
@@ -82,6 +78,11 @@ setInterval(pollApi, 5000);
 // Endpoint API
 app.get("/api/taixiu", (req, res) => {
   res.json(latestResult);
+});
+
+// Fix Not Found khi load root
+app.get("/", (req, res) => {
+  res.send("✅ API TaiXiu đang chạy! Endpoints: /api/taixiu");
 });
 
 // Start server
