@@ -30,27 +30,34 @@ async function pollApi() {
       timeout: 10000
     });
 
-    if (resp.data.status === "OK" && Array.isArray(resp.data.data)) {
-      // tìm phiên có cmd = 7006
-      const game = resp.data.data.find(g => g.cmd === 7006);
-      if (game && game.d1 != null && game.d2 != null && game.d3 != null) {
-        const total = game.d1 + game.d2 + game.d3;
-        const ket_qua = getTaiXiu(game.d1, game.d2, game.d3);
+    // Nếu API không hợp lệ thì giữ nguyên phiên hiện tại
+    if (!resp.data || resp.data.status !== "OK" || !Array.isArray(resp.data.data)) {
+      console.log("⏸ API chưa có dữ liệu, giữ nguyên phiên:", latestResult.Phien);
+      return;
+    }
 
-        latestResult = {
-          Phien: game.sid,
-          Xuc_xac_1: game.d1,
-          Xuc_xac_2: game.d2,
-          Xuc_xac_3: game.d3,
-          Tong: total,
-          Ket_qua: ket_qua
-        };
+    // tìm phiên có cmd = 7006
+    const game = resp.data.data.find(g => g.cmd === 7006);
+    if (game && game.d1 != null && game.d2 != null && game.d3 != null) {
+      const total = game.d1 + game.d2 + game.d3;
+      const ket_qua = getTaiXiu(game.d1, game.d2, game.d3);
 
-        console.log(`[TX] Phiên ${game.sid} - Tổng: ${total}, KQ: ${ket_qua}`);
-      }
+      latestResult = {
+        Phien: game.sid,
+        Xuc_xac_1: game.d1,
+        Xuc_xac_2: game.d2,
+        Xuc_xac_3: game.d3,
+        Tong: total,
+        Ket_qua: ket_qua
+      };
+
+      console.log(`[TX] ✅ Phiên ${game.sid} - Tổng: ${total}, KQ: ${ket_qua}`);
+    } else {
+      console.log("⏸ Không có kết quả mới, giữ nguyên phiên:", latestResult.Phien);
     }
   } catch (err) {
-    console.error("Lỗi khi lấy dữ liệu API:", err.message);
+    console.error("❌ Lỗi khi lấy dữ liệu API:", err.message);
+    // lỗi cũng không reset dữ liệu, chỉ giữ nguyên
   }
 }
 
